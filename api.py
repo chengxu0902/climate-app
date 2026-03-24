@@ -61,35 +61,40 @@ def predict_thermal_risk(data: AppInput):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取城市经纬度失败: {str(e)}")
 
-    # --- 第二步：获取实时天气 (修复太阳辐射获取逻辑) ---
-    # 我们把 shortwave_radiation 放到了 &hourly= 后面，并加上了 timezone=auto 保障时间对齐
+# --- 第二步：获取实时天气 (终极装甲防弹版) ---
     weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,apparent_temperature&hourly=shortwave_radiation&timezone=auto&forecast_days=2"
     try:
-        resp = requests.get(weather_url, timeout=5).json()
+        resp_json = requests.get(weather_url, timeout=8).json()
         
-        # 1. 获取常规当前天气
-        w_data = resp["current"]
-        current_temp = w_data["temperature_2m"]
-        current_humidity = w_data["relative_humidity_2m"]
-        current_wind = w_data["wind_speed_10m"] / 3.6  # 转为 m/s
-        current_at = w_data["apparent_temperature"]
+        # 安全提取字典，兜底用 {}
+        current_data = resp_json.get("current", {})
+        hourly_data = resp_json.get("hourly", {})
         
-        # 2. 从 hourly (每小时数据) 中精准匹配当前的太阳辐射
-        current_time_str = w_data["time"][:13] # 截取到当前小时 (例如 "2024-03-24T12")
-        hourly_times = [t[:13] for t in resp["hourly"]["time"]]
+        current_temp = current_data.get("temperature_2m", 25.0)
+        current_humidity = current_data.get("relative_humidity_2m", 50.0)
         
-        if current_time_str in hourly_times:
-            idx = hourly_times.index(current_time_str)
-            current_sr = resp["hourly"]["shortwave_radiation"][idx]
-            # 夜间或阴天偶尔返回 null，做安全处理
-            if current_sr is None: 
-                current_sr = 0.0
-        else:
-            current_sr = 0.0 # 找不到时的备用安全值
+        raw_wind = current_data.get("wind_speed_10m", 0.0)
+        current_wind = raw_wind / 3.6 if raw_wind is not None else 0.0
+        
+        current_at = current_data.get("apparent_temperature")
+        if current_at is None:
+            current_at = current_temp
             
+        current_sr = 0.0
+        if "time" in current_data:
+            current_time_str = current_data["time"][:13]
+            hourly_times = [t[:13] for t in hourly_data.get("time", [])]
+            
+            if current_time_str in hourly_times:
+                idx = hourly_times.index(current_time_str)
+                sr_list = hourly_data.get("shortwave_radiation", [])
+                if idx < len(sr_list) and sr_list[idx] is not None:
+                    current_sr = sr_list[idx]
+                    
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取天气失败: {str(e)}")
-
+        raise HTTPException(status_code=500, detail=f"获取天气解析失败: {str(e)}")
+    
+    # 🌟【这就是你刚才漏掉的极其关键的一行！】🌟
     at_guidance = get_at_guidance(current_at)
 
     # --- 第三步：初始化 JOS-3 模型 ---
