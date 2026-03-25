@@ -50,10 +50,17 @@ def get_at_guidance(at_value):
 # ==========================================
 @app.post("/predict")
 def predict_thermal_risk(data: AppInput):
-   # --- 第一步：获取经纬度 (升级为支持中文) ---
+ # 在函数的开头定义一个极其逼真的浏览器身份头
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json'
+    }
+
+    # --- 第一步：获取经纬度 ---
     geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={data.city}&count=1&language=zh&format=json"
     try:
-        geo_resp = requests.get(geo_url, timeout=5).json()
+        # ⚠️ 这里加上 headers 伪装身份
+        geo_resp = requests.get(geo_url, headers=headers, timeout=5).json()
         if "results" not in geo_resp:
             raise HTTPException(status_code=404, detail=f"未找到城市 '{data.city}'，请检查输入")
         lat = geo_resp["results"][0]["latitude"]
@@ -61,11 +68,14 @@ def predict_thermal_risk(data: AppInput):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取城市经纬度失败: {str(e)}")
 
-    # --- 第二步：获取实时天气 (严谨版，拒绝虚假兜底数据) ---
+    # --- 第二步：获取实时天气 ---
     weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,apparent_temperature&hourly=shortwave_radiation&timezone=auto&forecast_days=2"
     try:
-        resp = requests.get(weather_url, timeout=8)
+        # ⚠️ 这里也加上 headers 伪装身份
+        resp = requests.get(weather_url, headers=headers, timeout=8)
         resp_json = resp.json()
+        
+        # 🛡️ 拦截处理... (后面的代码保持原样)
         
         # 🛡️ 核心排错：如果气象局限制了调用或报错，直接拦截并通知用户
         if "error" in resp_json:
