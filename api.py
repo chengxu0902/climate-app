@@ -50,36 +50,47 @@ def get_at_guidance(at_value):
 # ==========================================
 @app.post("/predict")
 def predict_thermal_risk(data: AppInput):
-    # --- 第一步：获取经纬度 ---
-    geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={data.city}&count=1&language=en&format=json"
+   # --- 第一步：获取经纬度 (升级为支持中文) ---
+    geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={data.city}&count=1&language=zh&format=json"
     try:
         geo_resp = requests.get(geo_url, timeout=5).json()
         if "results" not in geo_resp:
-            raise HTTPException(status_code=404, detail="未找到该城市，请检查拼写")
+            raise HTTPException(status_code=404, detail=f"未找到城市 '{data.city}'，请检查输入")
         lat = geo_resp["results"][0]["latitude"]
         lon = geo_resp["results"][0]["longitude"]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取城市经纬度失败: {str(e)}")
 
-# --- 第二步：获取实时天气 (终极装甲防弹版) ---
+    # --- 第二步：获取实时天气 (严谨版，拒绝虚假兜底数据) ---
     weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,apparent_temperature&hourly=shortwave_radiation&timezone=auto&forecast_days=2"
     try:
-        resp_json = requests.get(weather_url, timeout=8).json()
+        resp = requests.get(weather_url, timeout=8)
+        resp_json = resp.json()
         
-        # 安全提取字典，兜底用 {}
+        # 🛡️ 核心排错：如果气象局限制了调用或报错，直接拦截并通知用户
+        if "error" in resp_json:
+            raise HTTPException(status_code=500, detail=f"气象局接口拒绝访问: {resp_json.get('reason')}")
+            
         current_data = resp_json.get("current", {})
         hourly_data = resp_json.get("hourly", {})
         
-        current_temp = current_data.get("temperature_2m", 25.0)
-        current_humidity = current_data.get("relative_humidity_2m", 50.0)
+        # ⚠️ 拒绝兜底：如果连最基础的真实温度都没拿到，说明接口崩了，直接抛出异常
+        if "temperature_2m" not in current_data or current_data["temperature_2m"] is None:
+            raise HTTPException(status_code=500, detail="未从气象局获取到真实的温度数据！")
+            
+        current_temp = current_data["temperature_2m"]
         
-        raw_wind = current_data.get("wind_speed_10m", 0.0)
-        current_wind = raw_wind / 3.6 if raw_wind is not None else 0.0
+        # 湿度和风速如果是 null，用 0 替代防止计算公式崩溃
+        current_humidity = current_data.get("relative_humidity_2m") or 50.0 
+        raw_wind = current_data.get("wind_speed_10m") or 0.0
+        current_wind = raw_wind / 3.6 
         
+        # 体感温度如果缺失，才用真实温度替补
         current_at = current_data.get("apparent_temperature")
         if current_at is None:
             current_at = current_temp
             
+        # 太阳辐射提取逻辑
         current_sr = 0.0
         if "time" in current_data:
             current_time_str = current_data["time"][:13]
@@ -91,6 +102,8 @@ def predict_thermal_risk(data: AppInput):
                 if idx < len(sr_list) and sr_list[idx] is not None:
                     current_sr = sr_list[idx]
                     
+    except HTTPException:
+        raise # 保持原来的 HTTPException 不被下面的 except 覆盖
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取天气解析失败: {str(e)}")
     
