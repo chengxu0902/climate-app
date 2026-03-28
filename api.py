@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware  # 👈 1. 新增：引入跨域处理模块
 from pydantic import BaseModel
 import sys
 import os
@@ -14,6 +15,15 @@ sys.path.append(jos3_path)
 import jos3
 
 app = FastAPI(title="气候预警核心计算 API")
+
+# 👇 2. 新增：加上这段配置，保安就会对你的微搭小程序直接放行！
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 允许所有前端网址访问（最省事的做法）
+    allow_credentials=True,
+    allow_methods=["*"],  # 允许 POST, GET 等所有请求
+    allow_headers=["*"],
+)
 
 # ==========================================
 # 1. 结构与辅助函数 (新增了接收天气参数)
