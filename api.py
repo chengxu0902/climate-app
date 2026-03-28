@@ -90,19 +90,29 @@ def predict_thermal_risk(data: AppInput):
                 time_to_320 = m
                 break
                 
-        # 低温智能建议生成逻辑
+        # ==================================
+        # 升级版：低温智能建议生成逻辑
+        # ==================================
         wci_val = float(wci)
         advice_mode = "cold"
         adv_lvl_id = 1 
 
-        if wci_val < -45.0: adv_lvl_id = 4
-        elif wci_val < -25.0: adv_lvl_id = 3
-        elif wci_val < -10.0: adv_lvl_id = 2
+        # 1. 调整风寒指数判定阈值 (将 <5℃ 直接列入寒冷注意级别)
+        if wci_val < -25.0: adv_lvl_id = 4
+        elif wci_val < -10.0: adv_lvl_id = 3
+        elif wci_val < 5.0: adv_lvl_id = 2 
         else: adv_lvl_id = 1
 
+        # 2. 🚨 【核心修复】智能穿衣比对强制干预
+        # 如果环境温度低于 10 度，但用户穿得少于 0.7 clo，系统强制报警！
+        if current_temp < 10.0 and data.clo < 0.7:
+            adv_lvl_id = max(adv_lvl_id, 2) # 强制升至至少2级（注意）
+
+        # 3. JOS-3 生理兜底 (防失温)
         if time_to_350 is not None and time_to_350 <= 60 and adv_lvl_id < 3: adv_lvl_id = 3
         if time_to_320 is not None and adv_lvl_id < 4: adv_lvl_id = 4
 
+        # 4. 动态生成建议文本 (结合 data.clo 进行毒舌提醒)
         if adv_lvl_id == 4:
             adv_title = "🟣 极度危险 (立即撤离/生命维持)"
             adv_summary = "极寒环境，风寒极高。面临重度失温与肢体快速冻伤的双重危险！严禁户外暴露！"
@@ -112,19 +122,29 @@ def predict_thermal_risk(data: AppInput):
         elif adv_lvl_id == 3:
             adv_title = "🔵 危险 (缩短暴露/提供温饮)"
             adv_summary = "极寒酷冷环境，中度冷应激与冻伤风险增加。强制缩短单次暴露时间。"
-            adv_clo = "🧤 穿着重型防寒防风系统（≥1.50-2.0clo）。必须佩戴防风手套和帽子盖住耳朵。"
+            if data.clo < 1.0:
+                adv_clo = f"⚠️ 极度危险：您当前着装（{data.clo}clo）在严寒中如同裸奔！必须立即换上重型防寒防风系统（≥1.50clo）。"
+            else:
+                adv_clo = "🧤 穿着重型防寒防风系统（≥1.50clo）。必须佩戴防风手套和帽子盖住耳朵。"
             adv_act = "🏃‍♂️ 严格限制中重体力作业节奏。实行作30休30的轮换制。在温暖干燥遮阴处休息复温。"
             adv_hyd = "💧 足量补充热淡盐水或含糖温热饮料（不可饮酒/咖啡）。采取少量多次原则补水。"
         elif adv_lvl_id == 2:
-            adv_title = "❄️ 注意 (常规防寒/增加活动)"
-            adv_summary = "寒冷环境，感觉冷，核心体温产热不足。注意肢体保暖，不可长时间静止。"
-            adv_clo = "🧤 穿着正常的保暖防风衣物组合（约1.0-1.50clo）。重点保持肢体干燥。"
+            adv_title = "❄️ 注意 (寒冷防冻/调整衣物)"
+            adv_summary = "环境寒冷。必须注意肢体保暖，防范冷应激与感冒风险。"
+            # 👇 动态比对就在这里！
+            if data.clo < 0.7:
+                adv_clo = f"⚠️ 严重警告：您当前仅穿着短袖或单衣（{data.clo}clo），但在 {current_temp}℃ 的环境下极易丧失体温！请立即增加防风保暖外套（建议≥1.0clo）。"
+            else:
+                adv_clo = "🧤 请确保穿着防风保暖外套（≥1.0clo），重点保持四肢和头部温暖干燥。"
             adv_act = "🏃‍♂️ 维持正常的作业节奏，增加肢体活动产热，设置强制复温闹钟（作业50分钟休息10分钟）。"
             adv_hyd = "💧 规律饮水！每小时至少补充500-750ml温白开或淡盐水。"
         else:
-            adv_title = "✅ 安全 (状态良好/注意防风)"
-            adv_summary = "JOS-3模型未预测到明显冷应激，当前风寒指数与着装组合安全。注意日间常规保暖。"
-            adv_clo = "🧤 穿着当前的保暖衣物（约0.7-1.00clo）即可良好适配环境。"
+            adv_title = "✅ 安全 (微凉/状态良好)"
+            adv_summary = "当前风寒指数安全。注意日间常规保暖。"
+            if data.clo < 0.7:
+                adv_clo = f"⚠️ 提示：虽然因活动量大核心体温暂未报警，但您着装（{data.clo}clo）偏单薄，停止活动后极易受凉，建议备好外套。"
+            else:
+                adv_clo = "🧤 穿着当前的保暖衣物即可良好适配环境。"
             adv_act = "🏃‍♂️ 可按常规节奏进行作业和活动。根据体感变化适当调节休息频率。"
             adv_hyd = "💧 保持正常的饮水频率即可（约250-500ml/h）。"
 
@@ -170,41 +190,63 @@ def predict_thermal_risk(data: AppInput):
                 time_to_400 = m
                 break
                 
-        # 高温智能建议生成逻辑
+       # ==================================
+        # 升级版：高温智能建议生成逻辑
+        # ==================================
         wbgt_val = float(wbgt_outdoor)
         advice_mode = "heat"
         adv_lvl_id = 1 
         
+        # 1. 基础 WBGT 判定
         if wbgt_val >= 32.2: adv_lvl_id = 4
         elif wbgt_val >= 29.4: adv_lvl_id = 3
         elif wbgt_val >= 26.7: adv_lvl_id = 2
         else: adv_lvl_id = 1
 
+        # 2. 🚨 【核心修复】智能穿衣比对强制干预 (高温捂热报警)
+        # 如果环境气温较高(>=28℃) 且 着装较厚(>0.7clo，比如穿了厚重密闭工作服)
+        if current_temp >= 28.0 and data.clo > 0.7:
+            adv_lvl_id = max(adv_lvl_id, 3) # 穿厚衣服在高温下，极易引发热衰竭，强制拉升到3级高危预警
+
+        # 3. JOS-3 生理兜底
         if time_to_390 is not None and time_to_390 <= 60 and adv_lvl_id < 3: adv_lvl_id = 3
         if time_to_400 is not None and adv_lvl_id < 4: adv_lvl_id = 4
 
+        # 4. 动态生成建议文本 (结合 data.clo 进行毒舌提醒)
         if adv_lvl_id == 4:
             adv_title = "🔴 极度危险 (强制撤离/强制降温)"
             adv_summary = "极高温环境，致命热射病风险极高！必须强制撤离高温区或立即采取强制降温措施。"
-            adv_clo = "🎽 建议着短袖短裤（0.3-0.5clo），严禁着厚重密闭防护服。若需户外严禁暴晒，必须全身物理降温。"
+            if data.clo > 0.7:
+                adv_clo = f"⚠️ 致命警告：您当前的厚重着装（{data.clo}clo）在极高温下会形成‘蒸笼效应’，严重阻碍汗液蒸发与散热！必须立即脱去多余衣物或进行全身物理降温。"
+            else:
+                adv_clo = "🎽 建议着短袖短裤（0.3-0.5clo），严禁着厚重密闭防护服。若需户外严禁暴晒，必须配合全身物理降温。"
             adv_act = "🚨 立即停止所有重体力作业！实行全员强制休息，每作业30分钟必须在遮阴处休息30分钟。启动应急预案。"
-            adv_hyd = "💧 强制补水节奏！每小时饮用1000ml含盐电解质水（运动饮料）。严禁饮用含咖啡因和高糖饮料。"
+            adv_hyd = "💧 强制补水节奏！每小时饮用1000ml含盐电解质水（运动饮料）。"
         elif adv_lvl_id == 3:
             adv_title = "🟠 危险 (高危预警/降温服干预)"
             adv_summary = "酷热环境，极易发生重度热应激。严限作业强度，必须启用物理降温干预。"
-            adv_clo = "🎽 选择浅色、吸湿排汗轻便衣物。若着高阻热防护服作业，单次暴露严禁超40分钟，强烈建议开启降温服2档。"
-            adv_act = "🏃‍♂️ 严格限制中重体力作业。强制执行作业40分钟，休息20分钟的轮换制。在遮阴处或空调房休息。"
-            adv_hyd = "💧 规律补水节奏！每小时足量补充750-1000ml含盐电解质水。采取“少量多次”原则。"
+            if data.clo > 0.7:
+                adv_clo = f"⚠️ 高危警告：您当前着装（{data.clo}clo）严重偏厚！若为高阻热防护服作业，单次暴露严禁超30分钟，强烈建议立刻开启智能降温服2档以上！"
+            else:
+                adv_clo = "🎽 选择浅色、吸湿排汗轻便衣物。建议随时开启降温服2档辅助散热。"
+            adv_act = "🏃‍♂️ 严格限制中重体力作业。强制执行作40休20的轮换制。在遮阴处或空调房休息。"
+            adv_hyd = "💧 规律补水节奏！每小时足量补充750-1000ml含盐电解质水。"
         elif adv_lvl_id == 2:
             adv_title = "🟡 注意 (常规预警/适度休息)"
             adv_summary = "明显炎热环境，热痉挛、热衰竭风险增加。保持常规保水，适当降低强度。"
-            adv_clo = "🎽 保持透气、排汗轻便衣物（约0.50clo）。适当增加皮肤散热面积。"
+            if data.clo > 0.7:
+                adv_clo = f"⚠️ 提示：您当前着装（{data.clo}clo）在炎热环境中极易导致捂热中暑！建议换成轻薄透气的短袖长裤（约0.50clo）。"
+            else:
+                adv_clo = "🎽 保持透气、排汗轻便衣物（约0.50clo）。适当增加皮肤散热面积。"
             adv_act = "🏃‍♂️ 适度降低中高强度作业的节奏，设置强制休息闹钟（作业50分钟休息10分钟）。"
             adv_hyd = "💧 规律饮水！每小时至少补充500-750ml凉白开或淡盐水。不可等口渴时才饮水。"
         else:
             adv_title = "🟢 安全 (负荷适中/状态安全)"
-            adv_summary = "JOS-3模型未预测到危险核心体温攀升。当前气候与活动强度负荷良好。注意日常防暑降温即可。"
-            adv_clo = "🎽 穿着当前的衣物组合即可良好适配。注意作业时的透气性。"
+            adv_summary = "JOS-3模型未预测到危险核心体温攀升。当前气候与活动强度负荷良好。"
+            if current_temp >= 25.0 and data.clo > 0.7:
+                 adv_clo = f"⚠️ 提示：虽然未达危险阈值，但气温偏暖，您穿着（{data.clo}clo）偏厚，大量活动后易闷热出汗，建议随时根据体感增减衣物。"
+            else:
+                 adv_clo = "🎽 穿着当前的衣物组合即可良好适配。注意作业时的透气性。"
             adv_act = "🏃‍♂️ 可按常规节奏进行作业和活动。根据体感变化适当调节休息频率。"
             adv_hyd = "💧 保持正常的饮水频率即可（约250-500ml/h）。保持体内水分平衡。"
 
